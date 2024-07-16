@@ -74,17 +74,32 @@ bool StandardAggregateHashTable::VectorEqual::operator()(const vector<Value> &lh
 // ----------------------------------LinearProbingAggregateHashTable------------------
 #ifdef USE_SIMD
 template <typename V>
+/**
+ * 向线性探测聚合哈希表中添加一个新的块。
+ * 此函数用于在哈希表中添加一组已经聚合过的数据。它首先检查输入的分组块和聚合块是否满足特定条件，
+ * 然后将聚合块的数据添加到哈希表中。
+ * 
+ * @param group_chunk 分组块，包含需要进行聚合操作的数据组。
+ * @param aggr_chunk 聚合块，包含已经根据分组键进行过聚合计算的结果。
+ * @return 返回操作结果，如果操作成功则返回RC::SUCCESS，否则返回RC::INVALID_ARGUMENT。
+ */
 RC LinearProbingAggregateHashTable<V>::add_chunk(Chunk &group_chunk, Chunk &aggr_chunk)
 {
+  // 检查分组块和聚合块的列数是否都为1，因为此哈希表仅支持单列分组和聚合。
   if (group_chunk.column_num() != 1 || aggr_chunk.column_num() != 1) {
     LOG_WARN("group_chunk and aggr_chunk size must be 1.");
     return RC::INVALID_ARGUMENT;
   }
+  
+  // 检查分组块和聚合块的行数是否相等，确保每个分组都有对应的结果。
   if (group_chunk.rows() != aggr_chunk.rows()) {
-    LOG_WARN("group_chunk and aggr _chunk rows must be equal.");
+    LOG_WARN("group_chunk and aggr_chunk rows must be equal.");
     return RC::INVALID_ARGUMENT;
   }
+  
+  // 将聚合块的数据批量添加到哈希表中，这里假设哈希表已经正确初始化并准备好接收数据。
   add_batch((int *)group_chunk.column(0).data(), (V *)aggr_chunk.column(0).data(), group_chunk.rows());
+  
   return RC::SUCCESS;
 }
 
@@ -212,8 +227,105 @@ template <typename V>
 void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_values, int len)
 {
   // your code here
-  exit(-1);
+  // inv (invalid) 表示是否有效，inv[i] = -1 表示有效，inv[i] = 0 表示无效。
+  // key[SIMD_WIDTH],value[SIMD_WIDTH] 表示当前循环中处理的键值对。
+  // off (offset) 表示线性探测冲突时的偏移量，key[i] 每次遇到冲突键，则off[i]++，如果key[i] 已经完成聚合，则off[i] = 0，
+  // i = 0 表示selective load 的起始位置。
+  // inv 全部初始化为 -1
+  // off 全部初始化为 0
+  std::vector<int> inv(SIMD_WIDTH, -1); // 初始化 inv 向量，所有元素设为-1，表示有效。
+  std::vector<int> off(SIMD_WIDTH, 0); // 初始化 off 向量，所有元素设为0，表示初始偏移量。
+  int i=0;
+  while (i + SIMD_WIDTH <= len) {
+    int valid_count = 0;
+    
+    // 1: 根据 `inv` 变量的值，从 `input_keys` 中 `selective load` `SIMD_WIDTH` 个不同的输入键值对。
+    for (int j = 0; j < SIMD_WIDTH; ++j) {
+      if (inv[j] == -1) { // 如果 inv[j] = -1 表示该位置有效，可以加载新数据
+        keys_[j] = input_keys[i + valid_count];
+        values_[j] = input_values[i + valid_count];
+        inv[j] = 0; // 设置为0表示正在处理
+        ++valid_count;
+      }
+    }
+    
+    // 2. 计算 i += |inv|, `|inv|` 表示 `inv` 中有效的个数 
+    i += valid_count;
 
+    // 3. 计算 hash 值，
+    for (int j = 0; j < SIMD_WIDTH; ++j) {
+      if (inv[j] == 0) { // 只对正在处理的键值对计算hash值
+        hash_values_[j] = hash_function(keys_[j]);
+      }
+    }
+
+    // 4. 根据聚合类型（目前只支持 sum），在哈希表中更新聚合结果。
+    // 如果本次循环，没有找到key[i] 在哈希表中的位置，则不更新聚合结果。
+    for (int j = 0; j < SIMD_WIDTH; ++j) {
+      if (inv[j] == 0) { // 对于正在处理的键值对
+        int index = hash_values_[j] % table_size_;
+        while (table_keys_[index] != keys_[j]) { // 线性探测直到找到或到达空位
+          if (table_keys_[index] == -1) { // 如果是空位，插入新键值对
+            table_keys_[index] = keys_[j];
+            table_values_[index] = values_[j];
+            break;
+          } else {
+            ++index; // 继续线性探测
+            ++off[j]; // 增加偏移量
+          }
+        }
+        if (table_keys_[index] == keys_[j]) { // 如果找到了键，则更新聚合结果
+          table_values_[index] += values_[j];
+          inv[j] = -1; // 聚合完成，标记为有效
+          off[j] = 0; // 重置偏移量
+        }
+      }
+    }
+    
+    // 5. gather 操作，根据 hash 值将 keys_ 的 gather 结果写入 table_key 中。
+    // 这一步通常在SIMD环境下使用，此处简化处理，直接使用了线性探测。
+    // 6. 更新 inv 和 off。如果本次循环key[i] 聚合完成，则inv[i]=-1，表示该位置在下次循环中读取新的键值对。
+    // 如果本次循环 key[i] 未在哈希表中聚合完成（table_key[i] != key[i]），则inv[i] = 0，表示该位置在下次循环中不需要读取新的键值对。
+    // 如果本次循环中，key[i]聚合完成，则off[i] 更新为 0，表示线性探测偏移量为 0，key[i] 未完成聚合，则off[i]++,表示线性探测偏移量加 1。
+    for (int j = 0; j < SIMD_WIDTH; ++j) {
+      if (inv[j] == 0) {
+        int index = hash_values_[j] % table_size_;
+        while (table_keys_[index] != keys_[j]) {
+          if (table_keys_[index] == -1){
+            table_keys_[index] = keys_[j];
+            table_values_[index] = values_[j];
+            break;
+          }
+          else{
+            ++index; // 继续线性探测
+            ++off[j]; // 增加偏移量
+          }
+        }
+        if(table_keys_[index] == keys_[j]){
+          table_values_[index] += values_[j];
+          inv[j] = -1; // 聚合完成，标记为有效
+          off[j] = 0; // 重置偏移量
+        }
+      }
+    }
+  }
+  
+  // 7. 通过标量线性探测，处理剩余键值对
+  for (; i < len; ++i) {
+    int index = hash_function(input_keys[i]) % table_size_;
+    while (table_keys_[index] != input_keys[i]) {
+      if (table_keys_[index] == -1) {
+        table_keys_[index] = input_keys[i];
+        table_values_[index] = input_values[i];
+        break;
+      } else {
+        ++index;
+      }
+    }
+    if (table_keys_[index] == input_keys[i]) {
+      table_values_[index] += input_values[i];
+    }
+  }
   // inv (invalid) 表示是否有效，inv[i] = -1 表示有效，inv[i] = 0 表示无效。
   // key[SIMD_WIDTH],value[SIMD_WIDTH] 表示当前循环中处理的键值对。
   // off (offset) 表示线性探测冲突时的偏移量，key[i] 每次遇到冲突键，则off[i]++，如果key[i] 已经完成聚合，则off[i] = 0，
