@@ -18,17 +18,30 @@ See the Mulan PSL v2 for more details. */
 
 struct Equal
 {
+  /* ?????????? */
+  /* ??left: ????? */
+  /* ??right: ????? */
+  /* ???: ???????????????????? */
   template <class T>
   static inline bool operation(const T &left, const T &right)
   {
     return left == right;
   }
+
 #if defined(USE_SIMD)
+  /* SIMD???????????__m256?? */
+  /* ??left: ??__m256??? */
+  /* ??right: ??__m256??? */
+  /* ???: ????__m256????????????????????? */
   static inline __m256 operation(const __m256 &left, const __m256 &right)
   {
     return _mm256_cmp_ps(left, right, _CMP_EQ_OS);
   }
 
+  /* SIMD???????????__m256i?? */
+  /* ??left: ??__m256i??? */
+  /* ??right: ??__m256i??? */
+  /* ???: ????__m256i????????????????????? */
   static inline __m256i operation(const __m256i &left, const __m256i &right) { return _mm256_cmpeq_epi32(left, right); }
 #endif
 };
@@ -149,11 +162,11 @@ struct SubtractOperator
   {
     return left - right;
   }
-  // your code here
-#if defined(USE_SIMD)
-  static inline __m256 operation(__m256 left, __m256 right) { exit(-1); }
 
-  static inline __m256i operation(__m256i left, __m256i right) { exit(-1); }
+#if defined(USE_SIMD)
+  static inline __m256 operation(__m256 left, __m256 right) { return _mm256_sub_ps(left, right); }
+
+  static inline __m256i operation(__m256i left, __m256i right) { return _mm256_sub_epi32(left, right); }
 #endif
 };
 
@@ -164,11 +177,11 @@ struct MultiplyOperator
   {
     return left * right;
   }
-// your code here
-#if defined(USE_SIMD)
-  static inline __m256 operation(__m256 left, __m256 right) { exit(-1); }
 
-  static inline __m256i operation(__m256i left, __m256i right) { exit(-1); }
+#if defined(USE_SIMD)
+  static inline __m256 operation(__m256 left, __m256 right) { return _mm256_mul_ps(left, right); }
+
+  static inline __m256i operation(__m256i left, __m256i right) { return _mm256_mullo_epi32(left, right); }
 #endif
 };
 
@@ -316,7 +329,7 @@ void binary_operator(T *left_data, T *right_data, T *result_data, int size)
     }
   }
 
-  // 处理剩余未对齐的数据
+  // å¤çå©ä½æªå¯¹é½çæ°æ®
   for (; i < size; i++) {
     auto &left_value  = left_data[LEFT_CONSTANT ? 0 : i];
     auto &right_value = right_data[RIGHT_CONSTANT ? 0 : i];
