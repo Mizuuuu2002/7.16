@@ -21,8 +21,7 @@ RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk
     // 计算分组键
     std::vector<Value> group_keys;
     for (size_t col_idx = 0; col_idx < groups_chunk.column_num(); ++col_idx) {
-      Value value;
-      groups_chunk.column(col_idx).get_value(row_idx, value);
+      Value value = groups_chunk.column(col_idx).get_value(row_idx);
       group_keys.push_back(value);
     }
 
@@ -41,8 +40,7 @@ RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk
     // 更新聚合结果
     auto &aggrs = it->second;
     for (size_t col_idx = 0; col_idx < aggrs_chunk.column_num(); ++col_idx) {
-      Value value;
-      aggrs_chunk.column(col_idx).get_value(row_idx, value);
+      Value value = aggrs_chunk.column(col_idx).get_value(row_idx);
       aggrs[col_idx].update(value);
     }
   }
