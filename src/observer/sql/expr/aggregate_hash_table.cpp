@@ -15,7 +15,7 @@ See the Mulan PSL v2 for more details. */
 RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk)
 {
   RC rc = RC::SUCCESS;
-  
+
   size_t num_rows = groups_chunk.rows();
   for (size_t row_idx = 0; row_idx < num_rows; ++row_idx) {
     // 计算分组键
@@ -26,15 +26,15 @@ RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk
     }
 
     // 查找或创建分组
-    auto it = this->hash_table_.find(group_keys);
-    if (it == this->hash_table_.end()) {
+    auto it = hash_table_.find(group_keys);
+    if (it == hash_table_.end()) {
       // 初始化新的分组
       std::vector<AggregateValue> aggrs(aggrs_chunk.column_num());
       for (size_t col_idx = 0; col_idx < aggrs_chunk.column_num(); ++col_idx) {
         aggrs[col_idx].initialize(aggrs_chunk.column(col_idx).type());
       }
-      this->hash_table_[group_keys] = std::move(aggrs);
-      it = this->hash_table_.find(group_keys);
+      hash_table_[group_keys] = std::move(aggrs);
+      it = hash_table_.find(group_keys);
     }
 
     // 更新聚合结果
@@ -47,7 +47,6 @@ RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk
 
   return rc;
 }
-
 
 void StandardAggregateHashTable::Scanner::open_scan()
 {
