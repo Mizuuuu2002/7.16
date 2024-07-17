@@ -100,8 +100,22 @@ void AggregateVecPhysicalOperator::update_aggregate_state(void *state, const Col
 
 RC AggregateVecPhysicalOperator::next(Chunk &chunk)
 {
-  // your code here
-  exit(-1);
+  // 将聚合结果添加到输出块中
+  for (size_t aggr_idx = 0; aggr_idx < aggr_values_.size(); ++aggr_idx) {
+    Column output_column;
+    output_chunk_.get_column(aggr_idx, output_column);
+    if (aggregate_expressions_[aggr_idx]->value_type() == AttrType::INTS) {
+      append_to_column<SumState<int>, int>(aggr_values_.at(aggr_idx), output_column);
+    } else if (aggregate_expressions_[aggr_idx]->value_type() == AttrType::FLOATS) {
+      append_to_column<SumState<float>, float>(aggr_values_.at(aggr_idx), output_column);
+    } else {
+      ASSERT(false, "not supported value type");
+    }
+  }
+
+  // 将计算结果传递给chunk
+  chunk = std::move(output_chunk_);
+  return RC::SUCCESS;
 }
 
 RC AggregateVecPhysicalOperator::close()
